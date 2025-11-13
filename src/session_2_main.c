@@ -1,7 +1,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 #include <pico/stdlib.h>
 
@@ -18,116 +17,83 @@
 
 #define DEFAULT_STACK_SIZE 2048
 #define CDC_ITF_TX      1
-#define DEFAULT_I2C_SDA_PIN  12
-#define DEFAULT_I2C_SCL_PIN  13
-#define DATASIZE 5
-#define GYROTHRESHOLD 0.5
 
-enum state {WAITING=1, DATA_READY};
+
+// Tehtävä 3: Tilakoneen esittely Add missing states.
+// Exercise 3: Definition of the state machine. Add missing states.
+enum state { WAITING=1, DATA_READY};
 enum state programState = WAITING;
 
-float normal_IMUGyro[3];
-float saved_IMUGyro[DATASIZE][3];
-int saveData_it = 0;
-char *morseMessage = "";
+// Tehtävä 3: Valoisuuden globaali muuttuja
+// Exercise 3: Global variable for ambient light
+uint32_t ambientLight;
 
 static void btn_fxn(uint gpio, uint32_t eventMask) {
+    // Tehtävä 1: Vaihda LEDin tila.
+    //            Tarkista SDK, ja jos et löydä vastaavaa funktiota, sinun täytyy toteuttaa se itse.
+    // Exercise 1: Toggle the LED. 
+    //             Check the SDK and if you do not find a function you would need to implement it yourself.    
     toggle_red_led();
-    if (gpio == BUTTON1) {
-        programState = DATA_READY;
-    }
-
-    else if (gpio == BUTTON2) {
-        // printf("%s", morseMessage);
-    }
+    
 }
 
 static void sensor_task(void *arg){
     (void)arg;
+    // Tehtävä 2: Alusta valoisuusanturi. Etsi SDK-dokumentaatiosta sopiva funktio.
+    // Exercise 2: Init the light sensor. Find in the SDK documentation the adequate function.
+    init_veml6030();
     for(;;){
-        // Collect data when programState == WAITING
-        if(programState == WAITING) {
-            float ax, ay, az, gx, gy, gz, t;
-            if(ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-                float all_IMUData[7] = {ax, ay, az, gx, gy, gz, t};
-                // Filter and normalize gyroscope absolute values
-                for(int i = 3; i < 6; i++) {
-                    normal_IMUGyro[i-3] = (fabs(all_IMUData[i])) / (ICM42670_GYRO_FSR_DEFAULT);
-                }
-                // Save the last n = DATASIZE gyro values into a matrix
-                // If the last n = DATASIZE gyro values have been saved, reset saveData_it iterator to 0
-                if(saveData_it < DATASIZE){
-                    for(int i = 0; i < 3; i++) {
-                        saved_IMUGyro[saveData_it][i] = normal_IMUGyro[i];
-                    }
-                    saveData_it++;
-                }
-                else {
-                    saveData_it = 0;
-                }
-            }
-        }   
+        
+        // Tehtävä 2: Muokkaa tästä eteenpäin sovelluskoodilla. Kommentoi seuraava rivi.
+        //             
+        // Exercise 2: Modify with application code here. Comment following line.
+        //             Read sensor data and print it out as string; 
+        //tight_loop_contents();
+        
+        if(programState = WAITING) {
+            ambientLight = veml6030_read_light();
+            programState = DATA_READY;
+        }
+
+        // Tehtävä 3:  Muokkaa aiemmin Tehtävässä 2 tehtyä koodia ylempänä.
+        //             Jos olet oikeassa tilassa, tallenna anturin arvo tulostamisen sijaan
+        //             globaaliin muuttujaan.
+        //             Sen jälkeen muuta tilaa.
+        // Exercise 3: Modify previous code done for Exercise 2, in previous lines. 
+        //             If you are in adequate state, instead of printing save the sensor value 
+        //             into the global variable.
+        //             After that, modify state
+
+
+
+
+
+        
+        // Exercise 2. Just for sanity check. Please, comment this out
+        // Tehtävä 2: Just for sanity check. Please, comment this out
+        // printf("sensorTask\n");
+
         // Do not remove this
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
 static void print_task(void *arg){
     (void)arg;
+    
     while(1){
-        // Print data when programState = DATA_READY
-        if(programState == DATA_READY) {
-            float maxVal = 0;
-            int maxVal_i = 0;
-            int maxVal_j = 0;
-            printf("\n[ Gx    Gy    Gz ]");
+        
+        // Tehtävä 3: Kun tila on oikea, tulosta sensoridata merkkijonossa debug-ikkunaan
+        //            Muista tilamuutos
+        //            Älä unohda kommentoida seuraavaa koodiriviä.
+        // Exercise 3: Print out sensor data as string to debug window if the state is correct
+        //             Remember to modify state
+        //             Do not forget to comment next line of code.
+        // tight_loop_contents();
 
-            // Loop through saved_IMUGyro
-            for(int i = 0; i < DATASIZE; i++) {
-                printf("\n[%.2f, %.2f, %.2f]", saved_IMUGyro[i][0], saved_IMUGyro[i][1], saved_IMUGyro[i][2]);
-                
-                // Check which axis has the largest value
-                for(int j = 0; j < 3; j++) {
-                    if(saved_IMUGyro[i][j] > GYROTHRESHOLD && saved_IMUGyro[i][j] > maxVal) {
-                        maxVal = saved_IMUGyro[i][j];
-                        maxVal_i = i;
-                        maxVal_j = j;
-                    }
-                }
-            }
-
-            // Check that maxVal has been given and then print dot, dash or space
-            if(maxVal > GYROTHRESHOLD) {
-                // Label the detected axis
-                char *axis;
-                switch(maxVal_j) {
-                    case 0:
-                        axis = "Gx";
-                        break;
-                    case 1:
-                        axis = "Gy";
-                        break;
-                    case 2:
-                        axis = "Gz";
-                        break;
-                }
-                printf("\nLARGEST SAVED GYRO DATA OF AXIS (%s) -- ", axis);
-                switch(maxVal_j) {
-                    case 0:
-                        // morseMessage += '.';
-                        printf("[.]");
-                        break;
-                    case 1:
-                        // morseMessage += '-';
-                        printf("[-]");
-                        break;
-                    case 2:
-                        // morseMessage += ' ';
-                        printf("[SPACE]");
-                        break;
-                }
-            }
-            printf("\n");
+        
+        if(programState = DATA_READY) {
+            printf("%ld\n", ambientLight);
             programState = WAITING;
         }
         
@@ -147,14 +113,17 @@ static void print_task(void *arg){
         //            Tällä menetelmällä kirjoitettu data tulee antaa CSV-muodossa:
         //            timestamp, luminance
 
+
+
+
+        // Exercise 3. Just for sanity check. Please, comment this out
+        // Tehtävä 3: Just for sanity check. Please, comment this out
+        // printf("printTask\n");
+        
         // Do not remove this
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
-
-// static void saveTask (void *arg){
-//         vTaskDelay(pdMS_TO_TICKS(1000));
-//     }
 
 
 // Exercise 4: Uncomment the following line to activate the TinyUSB library.  
@@ -170,8 +139,6 @@ static void usbTask(void *arg) {
 }*/
 
 int main() {
-
-
 
     // Exercise 4: Comment the statement stdio_init_all(); 
     //             Instead, add AT THE END OF MAIN (before vTaskStartScheduler();) adequate statements to enable the TinyUSB library and the usb-serial-debug.
@@ -194,14 +161,14 @@ int main() {
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
 
+    // Exercise 1: Initialize the button and the led and define an register the corresponding interrupton.
+    //             Interruption handler is defined up as btn_fxn
+    // Tehtävä 1:  Alusta painike ja LEd ja rekisteröi vastaava keskeytys.
+    //             Keskeytyskäsittelijä on määritelty yläpuolella nimellä btn_fxn
     init_button1();
-    init_button2();
     init_red_led();
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
-    gpio_set_irq_enabled_with_callback(BUTTON2, GPIO_IRQ_EDGE_FALL, true, btn_fxn);
 
-    init_ICM42670();
-    ICM42670_start_with_default_values();
 
     
     
