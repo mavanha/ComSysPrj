@@ -8,23 +8,21 @@
 #include "task.h"
 #include "queue.h"
 
-#include <tkjhat/sdk.h>     // TKJHAT SDK: IMU, MEMS mic, buzzer, LEDs, etc.
+#include <tkjhat/sdk.h>   // TKJHAT SDK: IMU, MEMS mic, buzzer, LEDs, buttons
 
-// ------------------- Morse / Project config -------------------
+// ------------------- Button / mode config -------------------
 
-// Button mapping on JTKJ HAT
 // From pins.h:
-//  SW1_PIN -> 2
-//  SW2_PIN -> 22
-#define BTN_MODE          SW1_PIN   // Short press: toggle IMU/MIC
-                                    // Long press: send message ("  \n")
-#define BTN_ACTION        SW2_PIN   // Short press: confirm symbol
-                                    // Long press: send space ' '
+//   SW1_PIN -> 2
+//   SW2_PIN -> 22
+#define BTN_MODE          SW1_PIN   // SW1: short = IMU/MIC toggle, long = send message
+#define BTN_ACTION        SW2_PIN   // SW2: short = confirm symbol, long = space
 
-// Timing for buttons (in ms)
-#define BTN_LONG_PRESS_MS       800   // >= this → long press
+#define BTN_LONG_PRESS_MS   800     // >= this → long press
+#define BTN_DEBOUNCE_MS     150     // ignore changes faster than this
 
-// FreeRTOS task config
+// ------------------- FreeRTOS task config -------------------
+
 #define INPUT_TASK_STACK_SIZE   2048
 #define COMM_TASK_STACK_SIZE    1024
 #define BUZZER_TASK_STACK_SIZE  1024
@@ -33,68 +31,61 @@
 #define COMM_TASK_PRIORITY      (tskIDLE_PRIORITY + 1)
 #define BUZZER_TASK_PRIORITY    (tskIDLE_PRIORITY + 1)
 
-// Queue sizes
-#define SYMBOL_QUEUE_LENGTH     64
+// Queues
+#define SYMBOL_QUEUE_LENGTH     64   // char: '.', '-', ' ', '\n'
 #define EVENT_QUEUE_LENGTH      8
 
-// Input mode: IMU orientation vs Microphone sound
+// ------------------- Types -------------------
+
 typedef enum {
     INPUT_MODE_IMU = 0,
     INPUT_MODE_MIC = 1
 } input_mode_t;
 
-// IMU-based orientation → dot / dash
 typedef enum {
     ORIENT_UNKNOWN = 0,
     ORIENT_DOT,
     ORIENT_DASH
 } orientation_t;
 
-// Simple app events for buzzer, etc.
 typedef enum {
     APP_EVENT_MSG_SENT = 0
 } app_event_t;
 
-// Mic state machine
 typedef enum {
     MIC_STATE_IDLE = 0,
     MIC_STATE_ACTIVE
 } mic_state_t;
 
-// ------------- IMU orientation thresholds -------------
-// Values are in "g" units because TKJHAT SDK already scales.
-// Typically when flat on table: az ≈ -1.0, ax≈0, ay≈0
-// When on side: ax ≈ +1.0, others ≈ 0
-#define ORIENT_AXIS_THRESH_MAIN   0.6f   // main axis must be larger than this
-#define ORIENT_AXIS_THRESH_OTHER  0.5f   // other axes must be within ±this
+// ------------------- IMU thresholds -------------------
 
-// ------------- Microphone thresholds (tune if needed) -------------
-// MEMS_SAMPLING_FREQUENCY = 8000 Hz, MEMS_BUFFER_SIZE = 256 → ~32 ms of audio per buffer
-#define MIC_AMPL_THRESHOLD     8000   // average absolute amplitude threshold (tune!)
-#define MIC_DOT_MAX_MS         250    // <= this duration → dot '.', longer → dash '-'
+// We don’t assume sign; we just check which axis has the largest magnitude.
+#define ORIENT_AXIS_THRESH_MAIN   0.6f   // required magnitude on main axis
 
-// Input task loop period
-#define INPUT_TASK_PERIOD_MS   20
+// ------------------- Microphone thresholds -------------------
 
+// MEMS_SAMPLING_FREQUENCY = 8000 Hz, MEMS_BUFFER_SIZE = 256 in SDK
+#define MIC_AMPL_THRESHOLD   8000   // average absolute amplitude threshold (tune!)
+#define MIC_DOT_MAX_MS       250    // <= this duration → dot '.', longer → dash '-'
+
+// Input task loop rate
+#define INPUT_TASK_PERIOD_MS 20
 
 // ------------------- Globals -------------------
 
-static QueueHandle_t xSymbolQueue = NULL;  // char: '.', '-', ' ', '\n'
-static QueueHandle_t xEventQueue  = NULL;  // app_event_t
+static QueueHandle_t xSymbolQueue = NULL;    // char
+static QueueHandle_t xEventQueue  = NULL;    // app_event_t
 
-// Current input mode (only touched in InputTask, read-only elsewhere)
 static input_mode_t g_inputMode = INPUT_MODE_IMU;
 
-// Microphone sample buffer and flag (filled by callback)
+// Microphone data
 static volatile int g_mic_samples_ready = 0;
 static int16_t      g_mic_buffer[MEMS_BUFFER_SIZE];
 
 // ------------------- Microphone callback -------------------
 
-// Called from PDM library ISR when new samples are ready
 static void on_pdm_samples_ready(void)
 {
-    // Read samples into our buffer; keep ISR short
     int n = get_microphone_samples(g_mic_buffer, MEMS_BUFFER_SIZE);
     if (n > 0) {
         g_mic_samples_ready = n;
@@ -110,18 +101,19 @@ static orientation_t detect_orientation(void)
         return ORIENT_UNKNOWN;
     }
 
-    // DOT: board flat (Z ≈ -1)
-    if ( (az < -ORIENT_AXIS_THRESH_MAIN) &&
-         (fabsf(ax) < ORIENT_AXIS_THRESH_OTHER) &&
-         (fabsf(ay) < ORIENT_AXIS_THRESH_OTHER) ) {
-        return ORIENT_DOT;
+    float absx = fabsf(ax);
+    float absy = fabsf(ay);
+    float absz = fabsf(az);
+
+    // Uncomment for tuning:
+    // printf("IMU ax=%.2f ay=%.2f az=%.2f\n", ax, ay, az);
+
+    if (absz > absx && absz > absy && absz > ORIENT_AXIS_THRESH_MAIN) {
+        return ORIENT_DOT;   // board “flat-ish”
     }
 
-    // DASH: board on its side (X ≈ +1)
-    if ( (ax > ORIENT_AXIS_THRESH_MAIN) &&
-         (fabsf(ay) < ORIENT_AXIS_THRESH_OTHER) &&
-         (fabsf(az) < ORIENT_AXIS_THRESH_OTHER) ) {
-        return ORIENT_DASH;
+    if (absx > absz && absx > absy && absx > ORIENT_AXIS_THRESH_MAIN) {
+        return ORIENT_DASH;  // board “on its side-ish”
     }
 
     return ORIENT_UNKNOWN;
@@ -131,15 +123,14 @@ static orientation_t detect_orientation(void)
 
 static void play_message_sent_melody(void)
 {
-    // Simple 3-note indication using TKJHAT buzzer (blocking, but in separate task)
-    buzzer_play_tone(880, 150);   // A5 short
+    buzzer_play_tone(880, 150);
     vTaskDelay(pdMS_TO_TICKS(50));
-    buzzer_play_tone(660, 150);   // E5 short
+    buzzer_play_tone(660, 150);
     vTaskDelay(pdMS_TO_TICKS(50));
-    buzzer_play_tone(440, 300);   // A4 longer
+    buzzer_play_tone(440, 300);
 }
 
-// ------------------- Helper: send symbols via queue -------------------
+// ------------------- Symbol helpers -------------------
 
 static void send_symbol(char c)
 {
@@ -154,14 +145,13 @@ static void send_space(void)
 
 static void send_message_end(void)
 {
-    // Protocol: two spaces + '\n'
     char space = ' ';
     char nl    = '\n';
+
     send_symbol(space);
     send_symbol(space);
     send_symbol(nl);
 
-    // Notify buzzer task
     app_event_t evt = APP_EVENT_MSG_SENT;
     xQueueSend(xEventQueue, &evt, 0);
 }
@@ -172,19 +162,19 @@ static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
 
-    // --- Local button state for edge & long-press detection ---
-    bool sw1_prev = false;
-    bool sw2_prev = false;
+    bool      sw1_prev = false;
+    bool      sw2_prev = false;
     TickType_t sw1_press_tick = 0;
     TickType_t sw2_press_tick = 0;
+    TickType_t sw1_last_change = 0;
+    TickType_t sw2_last_change = 0;
 
-    // --- Init hardware that depends on SDK / RTOS ---
-    init_led();       // red LED
-    init_buzzer();    // buzzer pin
+    init_led();
+    init_buzzer();
     init_sw1();
     init_sw2();
 
-    // Init IMU
+    // IMU init
     if (init_ICM42670() == 0) {
         printf("__IMU INIT OK__\n");
         if (ICM42670_start_with_default_values() != 0) {
@@ -194,7 +184,7 @@ static void vInputTask(void *pvParameters)
         printf("__IMU INIT FAILED__\n");
     }
 
-    // Init microphone (PDM MEMS)
+    // Mic init
     if (init_pdm_microphone() == 0) {
         pdm_microphone_set_callback(on_pdm_samples_ready);
         if (init_microphone_sampling() == 0) {
@@ -209,89 +199,88 @@ static void vInputTask(void *pvParameters)
     mic_state_t micState = MIC_STATE_IDLE;
     TickType_t  micStartTick = 0;
 
-    printf("__IMU MODE__\n");
     g_inputMode = INPUT_MODE_IMU;
+    printf("__IMU MODE__\n");
 
     while (1) {
         TickType_t now = xTaskGetTickCount();
 
-        // -------- Read buttons (active high) --------
         bool sw1_now = gpio_get(BTN_MODE) ? true : false;
         bool sw2_now = gpio_get(BTN_ACTION) ? true : false;
 
-        // -------- SW1: MODE / SEND MESSAGE (short vs long) --------
-        if (sw1_now && !sw1_prev) {
-            // rising edge: store press time
-            sw1_press_tick = now;
-        }
-        if (!sw1_now && sw1_prev) {
-            // falling edge: released
-            TickType_t dt = now - sw1_press_tick;
-            uint32_t ms = dt * portTICK_PERIOD_MS;
-            if (ms >= BTN_LONG_PRESS_MS) {
-                // Long press → send message end
-                printf("__MSG SEND__\n");
-                send_message_end();
+        // -------- SW1 (MODE / MESSAGE) with debounce --------
+        if (sw1_now != sw1_prev &&
+            (now - sw1_last_change) > pdMS_TO_TICKS(BTN_DEBOUNCE_MS)) {
+
+            sw1_last_change = now;
+
+            if (sw1_now) {
+                sw1_press_tick = now;
             } else {
-                // Short press → toggle mode
-                if (g_inputMode == INPUT_MODE_IMU) {
-                    g_inputMode = INPUT_MODE_MIC;
-                    printf("__MIC MODE__\n");
+                TickType_t dt = now - sw1_press_tick;
+                uint32_t ms   = dt * portTICK_PERIOD_MS;
+
+                if (ms >= BTN_LONG_PRESS_MS) {
+                    printf("__MSG SEND__\n");
+                    send_message_end();
                 } else {
-                    g_inputMode = INPUT_MODE_IMU;
-                    printf("__IMU MODE__\n");
-                    // reset mic state when leaving MIC mode
-                    micState = MIC_STATE_IDLE;
+                    if (g_inputMode == INPUT_MODE_IMU) {
+                        g_inputMode = INPUT_MODE_MIC;
+                        printf("__MIC MODE__\n");
+                    } else {
+                        g_inputMode = INPUT_MODE_IMU;
+                        printf("__IMU MODE__\n");
+                        micState = MIC_STATE_IDLE;
+                    }
                 }
             }
         }
         sw1_prev = sw1_now;
 
-        // -------- SW2: CONFIRM SYMBOL / SPACE (short vs long) --------
-        if (sw2_now && !sw2_prev) {
-            sw2_press_tick = now;
-        }
-        if (!sw2_now && sw2_prev) {
-            TickType_t dt = now - sw2_press_tick;
-            uint32_t ms = dt * portTICK_PERIOD_MS;
+        // -------- SW2 (SYMBOL / SPACE) with debounce --------
+        if (sw2_now != sw2_prev &&
+            (now - sw2_last_change) > pdMS_TO_TICKS(BTN_DEBOUNCE_MS)) {
 
-            if (ms >= BTN_LONG_PRESS_MS) {
-                // Long press SW2 → send SPACE (independent of mode)
-                send_space();
-                printf("__SPACE__\n");
+            sw2_last_change = now;
+
+            if (sw2_now) {
+                sw2_press_tick = now;
             } else {
-                // Short press SW2 → action depends on mode
-                if (g_inputMode == INPUT_MODE_IMU) {
-                    orientation_t o = detect_orientation();
-                    char symbol;
-                    if (o == ORIENT_DOT) {
-                        symbol = '.';
-                        send_symbol(symbol);
-                        printf("__DOT FROM IMU__\n");
-                    } else if (o == ORIENT_DASH) {
-                        symbol = '-';
-                        send_symbol(symbol);
-                        printf("__DASH FROM IMU__\n");
-                    } else {
-                        printf("__UNKNOWN ORIENTATION__\n");
-                    }
+                TickType_t dt = now - sw2_press_tick;
+                uint32_t ms   = dt * portTICK_PERIOD_MS;
+
+                if (ms >= BTN_LONG_PRESS_MS) {
+                    send_space();
+                    printf("__SPACE__\n");
                 } else {
-                    // In MIC mode we don't use SW2 short; you could
-                    // add extra functionality here if you like.
-                    printf("__SW2 SHORT IN MIC MODE__\n");
+                    if (g_inputMode == INPUT_MODE_IMU) {
+                        orientation_t o = detect_orientation();
+                        char symbol;
+                        if (o == ORIENT_DOT) {
+                            symbol = '.';
+                            send_symbol(symbol);
+                            printf("__DOT FROM IMU__\n");
+                        } else if (o == ORIENT_DASH) {
+                            symbol = '-';
+                            send_symbol(symbol);
+                            printf("__DASH FROM IMU__\n");
+                        } else {
+                            printf("__UNKNOWN ORIENTATION__\n");
+                        }
+                    } else {
+                        printf("__SW2 SHORT IN MIC MODE__\n");
+                    }
                 }
             }
         }
         sw2_prev = sw2_now;
 
-        // -------- MIC processing (only when in MIC mode) --------
+        // -------- MIC processing (only in MIC mode) --------
         if (g_inputMode == INPUT_MODE_MIC && g_mic_samples_ready > 0) {
-            // Take ownership of samples
             int sample_count = g_mic_samples_ready;
             g_mic_samples_ready = 0;
 
             if (sample_count > 0) {
-                // Compute average absolute amplitude
                 int64_t sumAbs = 0;
                 for (int i = 0; i < sample_count; i++) {
                     int32_t s = g_mic_buffer[i];
@@ -335,7 +324,6 @@ static void vInputTask(void *pvParameters)
             }
         }
 
-        // Small delay to set task "sample rate" (~50 Hz)
         vTaskDelay(pdMS_TO_TICKS(INPUT_TASK_PERIOD_MS));
     }
 }
@@ -349,7 +337,6 @@ static void vCommTask(void *pvParameters)
 
     while (1) {
         if (xQueueReceive(xSymbolQueue, &symbol, portMAX_DELAY) == pdTRUE) {
-            // Send symbol to Serial Client: '.', '-', ' ', '\n'
             putchar(symbol);
             fflush(stdout);
         }
@@ -361,8 +348,8 @@ static void vCommTask(void *pvParameters)
 static void vBuzzerTask(void *pvParameters)
 {
     (void)pvParameters;
-
     app_event_t evt;
+
     while (1) {
         if (xQueueReceive(xEventQueue, &evt, portMAX_DELAY) == pdTRUE) {
             if (evt == APP_EVENT_MSG_SENT) {
@@ -376,27 +363,22 @@ static void vBuzzerTask(void *pvParameters)
 
 int main(void)
 {
-    // Initialize stdio over USB (CDC) – used by Serial Client
     stdio_init_all();
 
-    // OPTIONAL: wait for USB connection so you see prints immediately
     while (!stdio_usb_connected()) {
         sleep_ms(10);
     }
 
-    // Initialize HAT basic stuff (I2C, stop RGB)
     init_hat_sdk();
-    sleep_ms(300); // let USB & HAT settle
+    sleep_ms(300);
 
-    // Create queues
     xSymbolQueue = xQueueCreate(SYMBOL_QUEUE_LENGTH, sizeof(char));
     xEventQueue  = xQueueCreate(EVENT_QUEUE_LENGTH, sizeof(app_event_t));
+
     if (xSymbolQueue == NULL || xEventQueue == NULL) {
-        // Failed to create queues; nothing we can do
         while (1) { }
     }
 
-    // Create tasks
     xTaskCreate(vInputTask,  "Input",  INPUT_TASK_STACK_SIZE,  NULL,
                 INPUT_TASK_PRIORITY,  NULL);
     xTaskCreate(vCommTask,   "Comm",   COMM_TASK_STACK_SIZE,   NULL,
@@ -404,10 +386,8 @@ int main(void)
     xTaskCreate(vBuzzerTask, "Buzzer", BUZZER_TASK_STACK_SIZE, NULL,
                 BUZZER_TASK_PRIORITY, NULL);
 
-    // Start FreeRTOS scheduler (never returns)
     vTaskStartScheduler();
 
-    // Should never reach here
     while (1) { }
     return 0;
 }
