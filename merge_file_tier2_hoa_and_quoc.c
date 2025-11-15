@@ -212,8 +212,11 @@ static void vInputTask(void *pvParameters)
             sw1_last_change = now;
 
             if (sw1_now) {
+                // Button SW1 pressed down → short beep
+                buzzer_play_tone(1000, 80);   // <<< BUZZER ON SW1 PRESS
                 sw1_press_tick = now;
             } else {
+                // Button SW1 released
                 TickType_t dt = now - sw1_press_tick;
                 uint32_t ms   = dt * portTICK_PERIOD_MS;
 
@@ -241,8 +244,11 @@ static void vInputTask(void *pvParameters)
             sw2_last_change = now;
 
             if (sw2_now) {
+                // Button SW2 pressed down → different short beep
+                buzzer_play_tone(700, 80);    // <<< BUZZER ON SW2 PRESS
                 sw2_press_tick = now;
             } else {
+                // Button SW2 released
                 TickType_t dt = now - sw2_press_tick;
                 uint32_t ms   = dt * portTICK_PERIOD_MS;
 
@@ -350,7 +356,7 @@ static void vBuzzerTask(void *pvParameters)
     while (1) {
         if (xQueueReceive(xEventQueue, &evt, portMAX_DELAY) == pdTRUE) {
             if (evt == APP_EVENT_MSG_SENT) {
-                play_message_sent_melody();   // <--- MUSIC/JINGLE HERE
+                play_message_sent_melody();   // melody when message is sent (long SW1)
             }
         }
     }
