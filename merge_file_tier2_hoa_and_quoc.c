@@ -15,7 +15,7 @@
 // From pins.h:
 //   SW1_PIN -> 2
 //   SW2_PIN -> 22
-#define BTN_MODE          SW1_PIN   // SW1: short = IMU/MIC toggle, long = send message
+#define BTN_MODE          SW1_PIN   // SW1: short = IMU/MIC toggle, long = send 3 spaces (message)
 #define BTN_ACTION        SW2_PIN   // SW2: short = confirm symbol, long = space
 
 #define BTN_LONG_PRESS_MS   800     // >= this → long press
@@ -140,13 +140,10 @@ static void send_space(void)
     send_symbol(space);
 }
 
-static void send_message_end(void)
+// optional: not used in this version, but kept for clarity
+static void send_message_end_direct(void)
 {
-    char space = ' ';
-    char nl    = '\n';
-
-    send_symbol(space);
-    send_symbol(space);
+    char nl = '\n';
     send_symbol(nl);
 
     app_event_t evt = APP_EVENT_MSG_SENT;
@@ -205,7 +202,7 @@ static void vInputTask(void *pvParameters)
         bool sw1_now = gpio_get(BTN_MODE) ? true : false;
         bool sw2_now = gpio_get(BTN_ACTION) ? true : false;
 
-        // -------- SW1 (MODE / MESSAGE) with debounce --------
+        // -------- SW1 (MODE / SEND 3 SPACES) with debounce --------
         if (sw1_now != sw1_prev &&
             (now - sw1_last_change) > pdMS_TO_TICKS(BTN_DEBOUNCE_MS)) {
 
@@ -213,7 +210,7 @@ static void vInputTask(void *pvParameters)
 
             if (sw1_now) {
                 // Button SW1 pressed down → short beep
-                buzzer_play_tone(1000, 80);   // <<< BUZZER ON SW1 PRESS
+                buzzer_play_tone(1000, 80);
                 sw1_press_tick = now;
             } else {
                 // Button SW1 released
@@ -221,9 +218,13 @@ static void vInputTask(void *pvParameters)
                 uint32_t ms   = dt * portTICK_PERIOD_MS;
 
                 if (ms >= BTN_LONG_PRESS_MS) {
-                    printf("__MSG SEND__\n");
-                    send_message_end();      // triggers buzzer melody via event queue
+                    // Long press SW1: send 3 spaces = end of message
+                    printf("__MSG SEND VIA 3 SPACES__\n");
+                    send_space();
+                    send_space();
+                    send_space();
                 } else {
+                    // Short press SW1: toggle mode
                     if (g_inputMode == INPUT_MODE_IMU) {
                         g_inputMode = INPUT_MODE_MIC;
                         printf("__MIC MODE__\n");
@@ -245,7 +246,7 @@ static void vInputTask(void *pvParameters)
 
             if (sw2_now) {
                 // Button SW2 pressed down → different short beep
-                buzzer_play_tone(700, 80);    // <<< BUZZER ON SW2 PRESS
+                buzzer_play_tone(700, 80);
                 sw2_press_tick = now;
             } else {
                 // Button SW2 released
@@ -253,9 +254,11 @@ static void vInputTask(void *pvParameters)
                 uint32_t ms   = dt * portTICK_PERIOD_MS;
 
                 if (ms >= BTN_LONG_PRESS_MS) {
+                    // Long press SW2 → SPACE (for letters / words)
                     send_space();
                     printf("__SPACE__\n");
                 } else {
+                    // Short press SW2 → symbol from IMU in IMU mode
                     if (g_inputMode == INPUT_MODE_IMU) {
                         orientation_t o = detect_orientation();
                         char symbol;
@@ -332,16 +335,39 @@ static void vInputTask(void *pvParameters)
 }
 
 // ------------------- Communication task -------------------
+// Handles: '.', '-', ' '
+// Sends newline + event when 3 consecutive spaces are seen.
 
 static void vCommTask(void *pvParameters)
 {
     (void)pvParameters;
     char symbol;
+    int spaceCount = 0;
 
     while (1) {
         if (xQueueReceive(xSymbolQueue, &symbol, portMAX_DELAY) == pdTRUE) {
-            putchar(symbol);
-            fflush(stdout);
+
+            if (symbol == ' ') {
+                spaceCount++;
+                // echo space
+                putchar(' ');
+                fflush(stdout);
+
+                if (spaceCount == 3) {
+                    // 3 consecutive spaces => end of message
+                    putchar('\n');
+                    fflush(stdout);
+                    spaceCount = 0;
+
+                    app_event_t evt = APP_EVENT_MSG_SENT;
+                    xQueueSend(xEventQueue, &evt, 0);
+                }
+            } else {
+                // Any non-space symbol resets the space counter
+                spaceCount = 0;
+                putchar(symbol);
+                fflush(stdout);
+            }
         }
     }
 }
@@ -356,7 +382,8 @@ static void vBuzzerTask(void *pvParameters)
     while (1) {
         if (xQueueReceive(xEventQueue, &evt, portMAX_DELAY) == pdTRUE) {
             if (evt == APP_EVENT_MSG_SENT) {
-                play_message_sent_melody();   // melody when message is sent (long SW1)
+                // 3-note melody when a message is sent (3 spaces)
+                play_message_sent_melody();
             }
         }
     }
