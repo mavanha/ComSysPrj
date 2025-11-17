@@ -133,6 +133,10 @@ SOFTWARE.
 #define VEML6030_I2C_ADDR                       0x10   /**< I2C address of the VEML6030 sensor. */
 #define VEML6030_CONFIG_REG                     0x00   /**< Configuration register. */
 #define VEML6030_ALS_REG                        0x04   /**< Ambient Light Sensing (ALS) data register. */
+#define VEML6030_ALS_WH_REG                     0x01   /**< High threshold window setting. */
+#define VEML6030_ALS_WL_REG                     0x02   /**< Low threshold window setting. */
+#define VEML6030_ALS_INT_REG                    0x06   /**< Interrupt status register. */
+#define VEML6030_ALS_INT_EN_BIT                 0x02   /**< Bit 1 in Config Reg enables INT. */
 /** @} */
 
 /* =========================
@@ -1060,6 +1064,25 @@ void veml6030_stop(void);
  * }
  * @endcode
  */
+
+/**
+ * @brief Set high and low thresholds for the interrupt.
+ * @param low_threshold  Value below which INT triggers.
+ * @param high_threshold Value above which INT triggers.
+ */
+void veml6030_set_thresholds(uint16_t low_threshold, uint16_t high_threshold);
+
+/**
+ * @brief Enable or disable the hardware interrupt on VEML6030.
+ * @param enable true to enable, false to disable.
+ */
+void veml6030_enable_interrupts(bool enable);
+
+/**
+ * @brief Clear interrupt flag by reading status.
+ * @return The contents of the interrupt status register.
+ */
+uint16_t veml6030_clear_interrupt_status(void);
 
 /** @} */ // end of group VEML6030
 
