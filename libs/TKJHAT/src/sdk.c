@@ -593,7 +593,59 @@ void veml6030_stop(){
     sleep_ms(10);
 }
 
+void veml6030_set_thresholds(uint16_t low_threshold, uint16_t high_threshold) {
+    // Write High Threshold (0x01)
+    uint8_t high_data[3] = {
+        VEML6030_ALS_WH_REG,
+        (uint8_t)(high_threshold & 0xFF),        // LSB
+        (uint8_t)((high_threshold >> 8) & 0xFF)  // MSB
+    };
+    i2c_write_blocking(i2c_default, VEML6030_I2C_ADDR, high_data, 3, false);
+    
+    sleep_ms(5);
 
+    // Write Low Threshold (0x02)
+    uint8_t low_data[3] = {
+        VEML6030_ALS_WL_REG,
+        (uint8_t)(low_threshold & 0xFF),
+        (uint8_t)((low_threshold >> 8) & 0xFF)
+    };
+    i2c_write_blocking(i2c_default, VEML6030_I2C_ADDR, low_data, 3, false);
+}
+
+void veml6030_enable_interrupts(bool enable) {
+    // Read current config (0x00)
+    uint8_t reg = VEML6030_CONFIG_REG;
+    uint8_t data[2];
+    i2c_write_blocking(i2c_default, VEML6030_I2C_ADDR, &reg, 1, true);
+    i2c_read_blocking(i2c_default, VEML6030_I2C_ADDR, data, 2, false);
+    
+    uint16_t config = ((uint16_t)data[1] << 8) | data[0];
+
+    // Modify Bit 1 (ALS_INT_EN)
+    if (enable) {
+        config |= VEML6030_ALS_INT_EN_BIT; // Set Bit 1
+    } else {
+        config &= ~VEML6030_ALS_INT_EN_BIT; // Clear Bit 1
+    }
+
+    // Write back
+    uint8_t new_data[3] = {
+        VEML6030_CONFIG_REG,
+        (uint8_t)(config & 0xFF),         // LSB
+        (uint8_t)((config >> 8) & 0xFF)   // MSB
+    };
+    i2c_write_blocking(i2c_default, VEML6030_I2C_ADDR, new_data, 3, false);
+}
+
+uint16_t veml6030_clear_interrupt_status(void) {
+    uint8_t reg = VEML6030_ALS_INT_REG;
+    uint8_t data[2] = {0, 0};
+    i2c_write_blocking(i2c_default, VEML6030_I2C_ADDR, &reg, 1, true);
+    i2c_read_blocking(i2c_default, VEML6030_I2C_ADDR, data, 2, false);
+    
+    return ((uint16_t)data[1] << 8) | data[0];
+}
 
 
 /* ===============================================
