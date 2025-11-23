@@ -601,6 +601,11 @@ void process_received_line(char *line) {
     xQueueSend(xPlaybackQueue, &nl, portMAX_DELAY);
 }
 
+/*
+I got the inspiration for this playback_task() from the “Morse-Code-Reader” FreeRTOS project (STM32 NUCLEO).
+URL: https://github.com/carter-glynn/Morse-Code-Reader
+This playback_task() follows a similar queue-driven symbol decode pattern.
+*/
 // =================================================================================
 // --- PLAYBACK TASK ---
 // This task provides local feedback for Morse symbols (both sent and received).
