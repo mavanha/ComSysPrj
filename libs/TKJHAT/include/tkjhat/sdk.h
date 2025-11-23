@@ -1101,6 +1101,34 @@ void veml6030_enable_interrupts(bool enable);
  */
 uint16_t veml6030_clear_interrupt_status(void);
 
+
+// ---------- VEML6030 interrupt callback API ----------
+
+/**
+ * @brief Type for user-provided VEML6030 interrupt callback.
+ *
+ * The callback is called from the SDK's GPIO ISR context whenever the
+ * VEML6030 asserts its interrupt line (active low). The parameter is
+ * the raw interrupt status register read from the sensor.
+ */
+typedef void (*veml6030_int_callback_t)(uint16_t int_status);
+
+/**
+ * @brief Configure the VEML6030 interrupt GPIO and register a callback.
+ *
+ * This function:
+ *  - configures the VEML6030 interrupt pin as input with pull-up,
+ *  - attaches a falling-edge GPIO interrupt (INT is active low),
+ *  - stores the user callback and calls it when the interrupt fires.
+ *
+ * @param cb  Pointer to user callback. Pass NULL to disable the callback.
+ *
+ * @note This only handles the GPIO side. You must still enable the interrupt
+ *       inside the sensor using ::veml6030_enable_interrupts(true) and
+ *       configure the thresholds with ::veml6030_set_thresholds().
+ */
+void veml6030_set_interrupt_handler(veml6030_int_callback_t cb);
+
 /** @} */ // end of group VEML6030
 
 
