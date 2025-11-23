@@ -34,6 +34,7 @@ SOFTWARE.
 #include <tkjhat/pdm_microphone.h>
 #include <stdio.h>
 #include <math.h>
+#include "hardware/clocks.h"
 
 
 
@@ -214,35 +215,140 @@ void stop_rgb_led(){
  *  BUZZER
  * ========================= */
 
- void init_buzzer() {
-    // Initialize the buzzer pin as an output
+/* 
+ * Non-blocking PWM support for the buzzer.
+ * This extends the original SDK (which used a busy-wait loop) by
+ * introducing buzzer_start_tone() / buzzer_stop_tone(), implemented
+ * on top of the Pico PWM hardware. This allows FreeRTOS tasks to
+ * play tones while yielding the CPU.
+ */
+
+// Internal PWM state for the buzzer
+static bool     s_buzzer_pwm_inited = false;
+static uint     s_buzzer_pwm_slice  = 0;
+static uint32_t s_buzzer_freq_hz    = 0;
+
+/**
+ * @brief Internal helper: configure PWM on BUZZER_PIN for a given frequency.
+ *
+ * If frequency_hz == 0, PWM is disabled and the buzzer is silent.
+ */
+static void buzzer_configure_pwm(uint32_t frequency_hz)
+{
+    if (!s_buzzer_pwm_inited) {
+        // Switch buzzer pin to PWM function and cache the slice number
+        gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
+        s_buzzer_pwm_slice  = pwm_gpio_to_slice_num(BUZZER_PIN);
+        s_buzzer_pwm_inited = true;
+    }
+
+    if (frequency_hz == 0) {
+        // No sound: disable PWM and drive low
+        pwm_set_enabled(s_buzzer_pwm_slice, false);
+        pwm_set_gpio_level(BUZZER_PIN, 0);
+        s_buzzer_freq_hz = 0;
+        return;
+    }
+
+    // System clock (typically 125 MHz on Pico)
+    uint32_t sys_clk_hz = clock_get_hz(clk_sys);
+
+    // Use a fixed TOP for reasonable resolution
+    const uint16_t top = 1000; // 1001 steps
+
+    // We want: freq = sys_clk / (divider * (TOP + 1))
+    float divider = (float)sys_clk_hz / (frequency_hz * (float)(top + 1));
+
+    // Clamp divider to valid [1, 255] range for PWM
+    if (divider < 1.0f)   divider = 1.0f;
+    if (divider > 255.0f) divider = 255.0f;
+
+    pwm_set_clkdiv(s_buzzer_pwm_slice, divider);
+    pwm_set_wrap(s_buzzer_pwm_slice, top);
+
+    // 50% duty cycle → square wave
+    uint16_t level = top / 2;
+    pwm_set_gpio_level(BUZZER_PIN, level);
+
+    pwm_set_enabled(s_buzzer_pwm_slice, true);
+    s_buzzer_freq_hz = frequency_hz;
+}
+
+void init_buzzer(void)
+{
+    // Keep a simple GPIO init for compatibility.
+    // Actual tone generation will reconfigure the pin to PWM as needed.
     gpio_init(BUZZER_PIN);
     gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+    gpio_put(BUZZER_PIN, 0);
+    s_buzzer_pwm_inited = false;
+    s_buzzer_freq_hz    = 0;
 }
 
- void buzzer_play_tone(uint32_t frequency, uint32_t duration_ms) {
-    // Calculate the period (in microseconds) and number of cycles
-    uint32_t period_us = 1000000 / frequency;
-    uint32_t num_cycles = duration_ms * frequency / 1000;
-
-    // Generate the tone by toggling the buzzer pin at the specified frequency
-    for (uint32_t i = 0; i < num_cycles; i++) {
-        gpio_put(BUZZER_PIN, 1);
-        busy_wait_us(period_us / 2);
-        gpio_put(BUZZER_PIN, 0);
-        busy_wait_us(period_us / 2);
+/**
+ * Legacy, blocking API.
+ *
+ * Now implemented using the non-blocking PWM helpers
+ * buzzer_start_tone() / buzzer_stop_tone(), plus a simple sleep.
+ * In FreeRTOS tasks you should prefer calling buzzer_start_tone()
+ * + vTaskDelay() instead of blocking here.
+ */
+void buzzer_play_tone(uint32_t frequency, uint32_t duration_ms)
+{
+    if (frequency == 0 || duration_ms == 0) {
+        return;
     }
+
+    buzzer_start_tone(frequency);
+    // Blocking sleep; at SDK level this is acceptable.
+    sleep_ms(duration_ms);
+    buzzer_stop_tone();
 }
 
- void buzzer_turn_off() {
-    // Turn off the buzzer by setting the pin to low
+/**
+ * @brief Start generating a tone on the buzzer (non-blocking).
+ *
+ * This configures PWM on BUZZER_PIN and returns immediately.
+ * Stop the tone manually using buzzer_stop_tone().
+ */
+void buzzer_start_tone(uint32_t frequency)
+{
+    buzzer_configure_pwm(frequency);
+}
+
+/**
+ * @brief Stop any ongoing tone and silence the buzzer.
+ */
+void buzzer_stop_tone(void)
+{
+    if (!s_buzzer_pwm_inited) {
+        // Nothing to do
+        return;
+    }
+
+    pwm_set_gpio_level(BUZZER_PIN, 0);
+    pwm_set_enabled(s_buzzer_pwm_slice, false);
+    s_buzzer_freq_hz = 0;
+
+    // Also make sure the pin is low (in case someone reuses GPIO mode)
     gpio_put(BUZZER_PIN, 0);
 }
 
-void deinit_buzzer() {
-    // Deinitialize the buzzer pin
-    gpio_deinit(BUZZER_PIN);
+void buzzer_turn_off(void)
+{
+    // Keep old semantics: just make sure the buzzer is silent.
+    buzzer_stop_tone();
 }
+
+void deinit_buzzer(void)
+{
+    // Stop PWM and release the pin
+    buzzer_stop_tone();
+    gpio_deinit(BUZZER_PIN);
+    s_buzzer_pwm_inited = false;
+    s_buzzer_freq_hz    = 0;
+}
+
 
 /* =========================
  *  I2C
