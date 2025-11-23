@@ -1,5 +1,4 @@
 // Group members' names: Hoa Ly, Jonathan Tran, Kien Quoc Vu
-
 //
 // JTKJ Morse Communicator for Raspberry Pi Pico with TKJ HAT
 //
@@ -14,6 +13,7 @@
 // connectivity to demonstrate network integration.
 //
 
+
 // --- Standard C Libraries ---
 #include <stdio.h>      // Standard Input/Output operations (e.g., printf)
 #include <string.h>     // String manipulation functions (e.g., strcmp, strlen)
@@ -21,11 +21,13 @@
 #include <ctype.h>      // Character handling functions (e.g., toupper)
 #include <stdlib.h>     // General utilities, including abs() for integer absolute value
 
+
 // --- Pico SDK Headers ---
 #include "pico/bootrom.h"   // For programmatic rebooting into BOOTSEL mode
 #include "pico/stdlib.h"    // Core Pico functions and definitions
 #include "pico/stdio.h"     // Standard I/O support for Pico (e.g., over USB)
 #include "pico/cyw43_arch.h"// Architecture-specific functions for the CYW43 Wi-Fi/BT chip
+
 
 // --- FreeRTOS Headers ---
 #include <FreeRTOS.h>   // Core FreeRTOS definitions
@@ -33,12 +35,15 @@
 #include <task.h>       // FreeRTOS task management API
 #include <semphr.h>     // FreeRTOS semaphore and mutex API
 
+
 // --- Custom Hardware Abstraction Layer ---
 #include "tkjhat/sdk.h" // TKJHAT SDK for interacting with the HAT's components (display, sensors, etc.)
+
 
 // =================================================================================
 // --- APPLICATION CONFIGURATION CONSTANTS ---
 // =================================================================================
+
 
 // --- Button and Input Mode Configuration ---
 #define BTN_MODE            BUTTON1 // SW1 on the HAT: Toggles input mode (IMU/MIC), long press sends message
@@ -49,13 +54,16 @@
 #define MIC_DOT_MAX_MS      250     // A sound duration less than or equal to this is a DOT; otherwise, it's a DASH
 #define INPUT_TASK_PERIOD_MS 20     // The polling rate (in ms) for the main input task loop
 
+
 // --- FreeRTOS Queue Configuration ---
 #define SYMBOL_QUEUE_LENGTH     64   // Max number of Morse symbols ('.', '-', ' ') that can be buffered internally
 #define EVENT_QUEUE_LENGTH      8    // Max number of application events (e.g., message sent) to buffer
 
+
 // =================================================================================
 // --- TYPE DEFINITIONS ---
 // =================================================================================
+
 
 // Defines the possible input methods for Morse code
 typedef enum {
@@ -63,16 +71,19 @@ typedef enum {
     INPUT_MODE_MIC = 1  // Input via the PDM microphone (sound)
 } input_mode_t;
 
+
 // Defines the states for the microphone input logic
 typedef enum {
     MIC_STATE_IDLE = 0,     // The microphone is waiting for a sound loud enough to cross the threshold
     MIC_STATE_ACTIVE        // The microphone has detected a sound and is measuring its duration
 } mic_state_t;
 
+
 // Defines internal application events for inter-task signaling
 typedef enum {
     APP_EVENT_MSG_SENT = 0 // An event indicating that a message has been successfully sent (e.g., by 3 spaces)
 } app_event_t;
+
 
 // =================================================================================
 // --- GLOBAL VARIABLES ---
@@ -81,10 +92,12 @@ static input_mode_t g_inputMode = INPUT_MODE_IMU; // Global variable to track th
 static volatile int g_mic_samples_ready = 0;      // A flag (set by an ISR) to indicate that new microphone samples are ready
 static int16_t      g_mic_buffer[MEMS_BUFFER_SIZE]; // Buffer to store the raw audio samples from the microphone
 
+
 // --- FreeRTOS Handles ---
 // These are handles to the queues and semaphores created in main()
 static QueueHandle_t xSymbolQueue = NULL; // Internal queue to pass Morse symbols from the input task to the TX/playback tasks
 static QueueHandle_t xEventQueue  = NULL; // Queue for high-level application events, like signaling the buzzer task
+
 
 // --- Microphone Interrupt Service Routine (ISR) Callback ---
 // This function is called automatically by the PDM library when a buffer of samples is full.
@@ -97,27 +110,33 @@ static void on_pdm_samples_ready(void) {
     }
 }
 
+
 // --- Task Function Prototypes ---
 // Forward declarations for the functions that will run as FreeRTOS tasks
 static void input_task(void *pvParameters); // Handles all user input: buttons, IMU, and microphone
 static void vBuzzerTask(void *pvParameters); // Plays sounds based on application events
 
+
 // =================================================================================
 // --- CONSTANTS AND DATA STRUCTURES ---
 // =================================================================================
 
+
 // --- Task Priority ---
 #define MAIN_TASK_PRIORITY (tskIDLE_PRIORITY + 2) // Sets a priority level for all application tasks
+
 
 // --- Queue Lengths ---
 #define SERIAL_TX_QUEUE_LENGTH 20 // This is legacy and not directly used for symbol buffering anymore
 #define PLAYBACK_QUEUE_LENGTH 40  // Max number of symbols to buffer for local feedback (display, LED, buzzer)
 #define SERIAL_RX_BUFFER_SIZE 128 // Max characters for the serial receive buffer
 
+
 // --- IMU Thresholds ---
 #define IMU_TILT_THRESHOLD      0.9f // g-force value (approx 0.9g) that must be exceeded to register a tilt
 #define IMU_NEUTRAL_THRESHOLD   0.5f // g-force value below which the device is considered to be in a neutral (flat) position
 #define IMU_DEBOUNCE_MS         300  // Debounce time for IMU actions to prevent multiple triggers from one movement
+
 
 // --- IMU State Machine ---
 // This state machine controls the logic for generating symbols from the IMU.
@@ -127,10 +146,12 @@ volatile enum AppState {
   STATE_COOLDOWN    // A symbol has just been generated. Waiting for the device to return to neutral.
 } g_appState = STATE_IDLE;
 
+
 // --- More FreeRTOS Handles ---
 QueueHandle_t xSerialTxQueue_actual; // This name is legacy; the queue is not used for primary TX logic
 QueueHandle_t xPlaybackQueue;       // Queue for symbols that need local feedback (display/sound)
 QueueHandle_t i2cMutex;             // A mutex to prevent concurrent access to the I2C bus (used by IMU and display)
+
 
 // --- Morse Code to Alphabet Translation Table ---
 // This array maps Morse code strings to their corresponding letters and numbers.
@@ -139,18 +160,21 @@ struct MorseAlphabet {
   char letter;       // The corresponding character (e.g., 'a')
 };
 
+
 // The full Morse code alphabet used for translation
 struct MorseAlphabet morseCodes[40] = {
   {".-", 'a'}, {"-...", 'b'}, {"-.-.", 'c'}, {"-..", 'd'}, {".", 'e'},
   {"..-.", 'f'}, {"--.", 'g'}, {"....", 'h'}, {"..", 'i'}, {".---", 'j'},
   {"-.-", 'k'}, {".-..", 'l'}, {"--", 'm'}, {"-.", 'n'}, {"---", 'o'},
   {".--.", 'p'}, {"--.-", 'q'}, {".-.", 'r'}, {"...", 's'}, {"-", 't'},
-  {"..-", 'u'}, {"...-", 'v'}, {"", 'w'}, {"-..-", 'x'}, {"-.--", 'y'},
+  {"..-", 'u'}, {"...-", 'v'}, {".--", 'w'}, {"-..-", 'x'}, {"-.--", 'y'},
   {"--..", 'z'}, {"-----", '0'}, {".----", '1'}, {"..---", '2'},
   {"...--", '3'}, {"....-", '4'}, {".....", '5'}, {"-....", '6'},
   {"--...", '7'}, {"---..", '8'}, {"----.", '9'}, {".-.-.-", '.'},
   {"--..--", ','}, {"..--..", '?'}, {"-.-.--", '!'}, {"", ' '}
 };
+
+
 
 
 // =================================================================================
@@ -163,17 +187,21 @@ char find_letter_from_morse_code(char *morseCode); // Utility to translate Morse
 void process_received_line(char *line);            // Utility to process a complete line received via serial
 
 
+
+
 // --- Helper Functions ---
 // A simple wrapper to send a character symbol to the internal symbol queue.
 static void send_symbol(char c) {
     xQueueSend(xSymbolQueue, &c, 0); // Use 0 as the timeout (don't block)
 }
 
+
 // A helper to send a space symbol, used for separating letters and words.
 static void send_space(void) {
     char space = ' ';
     send_symbol(space);
 }
+
 
 // Plays a simple 3-note melody on the buzzer to indicate a message was sent.
 static void play_message_sent_melody(void) {
@@ -184,12 +212,14 @@ static void play_message_sent_melody(void) {
     buzzer_play_tone(440, 300); // A4 note
 }
 
+
 // =================================================================================
 // --- MAIN FUNCTION ---
 // =================================================================================
 int main() {
     // 1. Initialize Standard I/O
     stdio_init_all();
+
 
     // Add a small delay to wait for the USB serial connection to be established.
     // This prevents the "White Screen of Death" where the program hangs if the
@@ -199,8 +229,9 @@ int main() {
         sleep_ms(100);
         i++;
     }
-    
+   
     printf("__JTKJ Morse Communicator - Starting...__\n");
+
 
     // 2. Initialize Wi-Fi
     // This block initializes the CYW43 chip and attempts to connect to a Wi-Fi network.
@@ -212,7 +243,7 @@ int main() {
         printf("Connecting to Wi-Fi\n");
         cyw43_arch_enable_sta_mode(); // Set the chip to station (client) mode
         printf("Set stable mode successfully -> connect to wifi\n");
-        
+       
         // Attempt to connect to the "panoulu" network, which is an open network.
         // This has a timeout of 30 seconds.
         if(cyw43_arch_wifi_connect_timeout_ms("panoulu", NULL, CYW43_AUTH_OPEN, 30 * 1000)) {
@@ -222,12 +253,14 @@ int main() {
         }
     }
 
+
     // 3. Initialize HAT Hardware
-    init_hat_sdk(); 
-    init_led();   
+    init_hat_sdk();
+    init_led();  
     init_rgb_led();
     init_buzzer();
     init_display();
+
 
     // 4. Initialize On-board Sensors (IMU and Microphone)
     if (init_ICM42670() == 0) { // Initialize the IMU
@@ -238,6 +271,7 @@ int main() {
     } else {
         printf("__IMU INIT FAILED__\n");
     }
+
 
     if (init_pdm_microphone() == 0) { // Initialize the microphone
         pdm_microphone_set_callback(on_pdm_samples_ready); // Register the ISR callback
@@ -250,24 +284,28 @@ int main() {
         printf("__MIC INIT FAILED__\n");
     }
 
+
     // 5. Display a startup message on the OLED
     clear_display();
-    write_text_xy(0, 0, "Morse App Ready");
-    write_text_xy(0, 10, "SW1=Mode, SW2=Action"); 
+    write_text_xy(0, 0, "IMU Mode Ready");
+    write_text_xy(0, 10, "SW1=Mode, SW2=Action");
     write_text_xy(0, 30, "RX MSG:");
 
+
     // 6. Create FreeRTOS Queues and Mutexes
-    xSerialTxQueue_actual = xQueueCreate(SERIAL_TX_QUEUE_LENGTH, sizeof(char)); 
+    xSerialTxQueue_actual = xQueueCreate(SERIAL_TX_QUEUE_LENGTH, sizeof(char));
     xPlaybackQueue = xQueueCreate(PLAYBACK_QUEUE_LENGTH, sizeof(char));
     i2cMutex = xSemaphoreCreateMutex(); // To protect the I2C bus
     xSymbolQueue = xQueueCreate(SYMBOL_QUEUE_LENGTH, sizeof(char)); // Internal symbol queue
     xEventQueue  = xQueueCreate(EVENT_QUEUE_LENGTH, sizeof(app_event_t)); // App event queue
+
 
     // Check if all queues and the mutex were created successfully. If not, halt.
     if (xSerialTxQueue_actual == NULL || xPlaybackQueue == NULL || i2cMutex == NULL || xSymbolQueue == NULL || xEventQueue == NULL) {
         printf("__CRITICAL ERROR: Could not create queues or mutex__\n");
         while (1) { blink_led(1); sleep_ms(100); } // Blink LED to indicate fatal error
     }
+
 
     // 7. Create FreeRTOS Tasks
     // Each task is a separate thread of execution. Stack sizes have been increased
@@ -279,16 +317,20 @@ int main() {
     xTaskCreate(playback_task, "PlaybackTask", 4096, NULL, MAIN_TASK_PRIORITY, NULL);
     xTaskCreate(vBuzzerTask, "BuzzerTask", 1024, NULL, MAIN_TASK_PRIORITY, NULL);
 
+
     printf("__Initialization complete. Starting scheduler.__\n");
+
 
     // 8. Start the FreeRTOS Scheduler
     // This function starts the real-time operating system and begins executing the created tasks.
     // Code execution should never proceed past this point.
     vTaskStartScheduler();
 
+
     while (1); // This line should be unreachable.
     return 0;
 }
+
 
 // =================================================================================
 // --- INPUT TASK ---
@@ -302,34 +344,42 @@ int main() {
 static void input_task(void *pvParameters) {
     (void)pvParameters; // Unused parameter
 
+
     // --- Local variables for IMU state ---
     float ax, ay, az, gx, gy, gz, t; // To store sensor readings
     TickType_t last_action_time_imu = 0; // Timestamp of the last IMU action for debouncing
     bool read_ok_imu = false; // Flag to check if IMU read was successful
+
 
     // --- Local variables for Button state ---
     bool       sw1_prev = false, sw2_prev = false; // Previous state of the buttons
     TickType_t sw1_press_tick = 0, sw2_press_tick = 0; // Tick count when buttons were pressed
     TickType_t sw1_last_change = 0, sw2_last_change = 0; // Tick count of the last state change for debouncing
 
+
     // --- Local variables for Microphone state ---
     mic_state_t micState = MIC_STATE_IDLE; // Current state of the microphone logic
     TickType_t  micStartTick = 0; // Tick count when a sound was first detected
+
 
     // Initialize the GPIO for the buttons
     init_sw1();
     init_sw2();
 
+
     g_inputMode = INPUT_MODE_IMU; // Start in IMU mode by default
     printf("__IMU MODE__\n");
+
 
     // --- Main Task Loop ---
     while (1) {
         TickType_t now = xTaskGetTickCount(); // Get the current time in system ticks
 
+
         // Read the current state of the buttons
         bool sw1_now = gpio_get(BTN_MODE) ? true : false;
         bool sw2_now = gpio_get(BTN_ACTION) ? true : false;
+
 
         // --- SW1 (Mode Button) Logic with Debouncing ---
         if (sw1_now != sw1_prev && (now - sw1_last_change) > pdMS_TO_TICKS(BTN_DEBOUNCE_MS)) {
@@ -339,7 +389,7 @@ static void input_task(void *pvParameters) {
                 sw1_press_tick = now; // Record the press time
             } else { // Button was just RELEASED
                 TickType_t press_duration = now - sw1_press_tick; // Calculate duration
-                
+               
                 if (press_duration >= pdMS_TO_TICKS(BTN_LONG_PRESS_MS)) {
                     // LONG PRESS on SW1: Send message (3 spaces)
                     printf("__MSG SEND VIA 3 SPACES__\n");
@@ -352,17 +402,33 @@ static void input_task(void *pvParameters) {
                     if (g_inputMode == INPUT_MODE_IMU) {
                         g_inputMode = INPUT_MODE_MIC;
                         printf("__MIC MODE__\n");
-                        micState = MIC_STATE_IDLE; // Reset mic state on mode switch
+                        micState = MIC_STATE_IDLE; // Reset mic state
+                        g_appState = STATE_IDLE;   // Reset IMU state
+                        set_led_status(false);     // Ensure LED is off
+                        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                            clear_display();
+                            write_text_xy(0, 0, "MIC Mode Ready");
+                            write_text_xy(0, 10, "SW1=Mode, SW2=Action");
+                            write_text_xy(0, 30, "RX MSG:");
+                            xSemaphoreGive(i2cMutex);
+                        }
                     } else {
                         g_inputMode = INPUT_MODE_IMU;
                         printf("__IMU MODE__\n");
-                        g_appState = STATE_IDLE; // Reset IMU state on mode switch
-                        set_led_status(false);   // Turn off LED if it was on
+                        g_appState = STATE_IDLE; // Reset IMU state
+                        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                            clear_display();
+                            write_text_xy(0, 0, "IMU Mode Ready");
+                            write_text_xy(0, 10, "SW1=Mode, SW2=Action");
+                            write_text_xy(0, 30, "RX MSG:");
+                            xSemaphoreGive(i2cMutex);
+                        }
                     }
                 }
             }
         }
         sw1_prev = sw1_now; // Update previous state for next loop
+
 
         // --- SW2 (Action Button) Logic with Debouncing ---
         if (sw2_now != sw2_prev && (now - sw2_last_change) > pdMS_TO_TICKS(BTN_DEBOUNCE_MS)) {
@@ -372,6 +438,7 @@ static void input_task(void *pvParameters) {
                 sw2_press_tick = now;
             } else { // Button was just RELEASED
                 TickType_t press_duration = now - sw2_press_tick;
+
 
                 if (press_duration >= pdMS_TO_TICKS(BTN_LONG_PRESS_MS)) {
                     // LONG PRESS on SW2: Send a space (for separating letters/words)
@@ -394,6 +461,7 @@ static void input_task(void *pvParameters) {
                                  }
                                  xSemaphoreGive(i2cMutex);
                              }
+
 
                              if (read_ok_imu) {
                                  char symbol = '?'; // Default to unknown
@@ -421,26 +489,20 @@ static void input_task(void *pvParameters) {
         }
         sw2_prev = sw2_now;
 
+
         // --- IMU State Machine Processing ---
         // This part runs continuously when in IMU mode.
         if (g_inputMode == INPUT_MODE_IMU) {
              if (g_appState == STATE_COOLDOWN) {
-                 // After a symbol is generated, wait for the device to return to a neutral (flat) position.
-                 read_ok_imu = false;
-                 if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-                         read_ok_imu = true;
-                    }
-                    xSemaphoreGive(i2cMutex);
-                 }
-                 if (read_ok_imu) {
-                     if (fabs(az) < IMU_NEUTRAL_THRESHOLD && fabs(ay) < IMU_NEUTRAL_THRESHOLD) {
-                         g_appState = STATE_IDLE; // Ready for the next symbol
-                         printf("__IMU COOLED DOWN (IDLE)__\n");
-                     }
-                 }
+                // After a symbol is generated, wait for a short debounce period to prevent accidental double-inputs.
+                // This replaces the logic that required the device to be returned to a flat position.
+                if ((now - last_action_time_imu) > pdMS_TO_TICKS(IMU_DEBOUNCE_MS)) {
+                    g_appState = STATE_IDLE; // Ready for the next symbol
+                    printf("__IMU COOLED DOWN (IDLE)__\n");
+                }
              }
         }
+
 
         // --- Microphone Input Processing ---
         // This part runs when in MIC mode and the ISR has signaled that new samples are available.
@@ -448,12 +510,14 @@ static void input_task(void *pvParameters) {
             int sample_count = g_mic_samples_ready;
             g_mic_samples_ready = 0; // Reset the flag immediately
 
+
             // Calculate the average absolute amplitude of the audio samples
             int64_t sumAbs = 0;
             for (int i = 0; i < sample_count; i++) {
                 sumAbs += abs(g_mic_buffer[i]);
             }
             uint32_t avgAbs = (uint32_t)(sumAbs / sample_count);
+
 
             // Microphone State Machine
             switch (micState) {
@@ -470,9 +534,10 @@ static void input_task(void *pvParameters) {
                     if (avgAbs <= MIC_AMPL_THRESHOLD) {
                         uint32_t durationMs = (now - micStartTick) * portTICK_PERIOD_MS;
                         char symbol = (durationMs <= MIC_DOT_MAX_MS) ? '.' : '-'; // Determine if it was a dot or dash
-                        
+                       
                         if(symbol == '.') printf("__MIC DOT (%lu ms)__\n", (unsigned long)durationMs);
                         else printf("__MIC DASH (%lu ms)__\n", (unsigned long)durationMs);
+
 
                         send_symbol(symbol);
                         micState = MIC_STATE_IDLE; // Return to idle state
@@ -481,10 +546,12 @@ static void input_task(void *pvParameters) {
             }
         }
 
+
         // Delay to control the loop rate of this task
         vTaskDelay(pdMS_TO_TICKS(INPUT_TASK_PERIOD_MS));
     }
 }
+
 
 // =================================================================================
 // --- SERIAL TX TASK ---
@@ -495,6 +562,7 @@ static void serial_tx_task(void *pvParameters) {
     (void)pvParameters;
     char symbol;
     int spaceCount = 0; // Counter for consecutive spaces
+
 
     while (1) {
         // Block indefinitely until a symbol is received from the input task
@@ -507,7 +575,7 @@ static void serial_tx_task(void *pvParameters) {
                     putchar('\n'); // Send a newline character
                     printf("\n__[Morse Send OK]__\n"); // Print confirmation
                     spaceCount = 0; // Reset counter
-                    
+                   
                     // Send a newline to the playback task to clear its display buffer
                     char nl_char = '\n';
                     xQueueSend(xPlaybackQueue, &nl_char, 0);
@@ -526,6 +594,7 @@ static void serial_tx_task(void *pvParameters) {
         }
     }
 }
+
 
 // =================================================================================
 // --- SERIAL RX TASK ---
@@ -558,6 +627,7 @@ static void serial_rx_task(void *pvParameters) {
     }
 }
 
+
 // =================================================================================
 // --- PROCESS RECEIVED LINE ---
 // This utility function processes a line of text received from the serial port.
@@ -582,6 +652,7 @@ void process_received_line(char *line) {
         while (1) { blink_led(1); sleep_ms(200); }
     }
 
+
     // --- Parse the line for Morse symbols, skipping debug messages in "__" ---
     bool in_debug_block = false;
     for (int i = 0; line[i] != '\0'; i++) {
@@ -603,11 +674,7 @@ void process_received_line(char *line) {
     xQueueSend(xPlaybackQueue, &nl, portMAX_DELAY);
 }
 
-/*
-I got the inspiration for this playback_task() from the “Morse-Code-Reader” FreeRTOS project (STM32 NUCLEO).
-URL: https://github.com/carter-glynn/Morse-Code-Reader
-This playback_task() follows a similar queue-driven symbol decode pattern.
-*/
+
 // =================================================================================
 // --- PLAYBACK TASK ---
 // This task provides local feedback for Morse symbols (both sent and received).
@@ -620,6 +687,7 @@ static void playback_task(void *pvParameters) {
     int morseSymbolPos = 0;
     char textMessageBuffer[22] = {0}; // Buffer to build the translated text message
     int textMessagePos = 0;
+
 
     while (1) {
         // Block until a symbol is received on the playback queue
@@ -666,7 +734,8 @@ static void playback_task(void *pvParameters) {
                 if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                     clear_display();
                     // Redraw the static UI elements
-                    write_text_xy(0, 0, "Morse App Ready");
+                    if(g_inputMode == INPUT_MODE_IMU) write_text_xy(0, 0, "IMU Mode Ready");
+                    else write_text_xy(0, 0, "MIC Mode Ready");
                     write_text_xy(0, 10, "SW1=Mode, SW2=Action");
                     write_text_xy(0, 30, "RX MSG:");
                     // Write the new message
@@ -675,6 +744,14 @@ static void playback_task(void *pvParameters) {
                     }
                     xSemaphoreGive(i2cMutex); // Release the mutex
                 }
+
+
+                // --- Send feedback to serial client ---
+                if (textMessagePos > 0) {
+                    printf("\n__RX OK: %s__\n", textMessageBuffer);
+                    fflush(stdout);
+                }
+
 
                 // Reset all buffers for the next message
                 textMessagePos = 0;
@@ -687,6 +764,7 @@ static void playback_task(void *pvParameters) {
         }
     }
 }
+
 
 // =================================================================================
 // --- BUZZER TASK ---
@@ -706,6 +784,7 @@ static void vBuzzerTask(void *pvParameters) {
      }
 }
 
+
 // =================================================================================
 // --- FIND LETTER FROM MORSE CODE ---
 // A utility function to look up a Morse code string in the `morseCodes` table
@@ -721,3 +800,8 @@ char find_letter_from_morse_code(char *morseCode) {
     }
     return '?'; // Return '?' if the code is not found
 }
+
+
+
+
+
