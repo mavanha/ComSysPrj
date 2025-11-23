@@ -37,6 +37,13 @@ SOFTWARE.
 #include "hardware/clocks.h"
 
 
+// ===== VEML6030 interrupt integration (SDK extension) =====
+
+// Pointer to user callback for VEML6030 interrupt
+static veml6030_int_callback_t s_veml6030_cb = NULL;
+
+// Forward declaration of the shared GPIO IRQ handler used by the SDK
+static void sdk_gpio_irq_handler(uint gpio, uint32_t events);
 
 
 /* ===================================
@@ -753,6 +760,43 @@ uint16_t veml6030_clear_interrupt_status(void) {
     return ((uint16_t)data[1] << 8) | data[0];
 }
 
+void veml6030_set_interrupt_handler(veml6030_int_callback_t cb)
+{
+    // Lưu callback của user (có thể là NULL để disable)
+    s_veml6030_cb = cb;
+
+    // Nếu bạn chưa từng config chân interrupt của VEML6030, làm ở đây.
+    // Tên macro pin: nếu header của bạn là VEML6030_INTERRUPT hoặc VEML6030_INT_PIN
+    // thì dùng đúng tên đó. Ví dụ:
+    const uint light_int_pin = VEML6030_INTERRUPT;  // đổi lại cho trùng header của bạn
+
+    // Cấu hình chân INT làm input, kéo lên
+    gpio_init(light_int_pin);
+    gpio_set_dir(light_int_pin, GPIO_IN);
+    gpio_pull_up(light_int_pin);
+
+    // Đăng ký callback GPIO toàn cục cho SDK nếu chưa đăng ký
+    // (Pico SDK cho phép 1 callback chung cho nhiều chân)
+    static bool s_gpio_irq_inited = false;
+    if (!s_gpio_irq_inited) {
+        s_gpio_irq_inited = true;
+        gpio_set_irq_enabled_with_callback(
+            light_int_pin,
+            GPIO_IRQ_EDGE_FALL,
+            cb != NULL,        // enable only if callback is non-NULL
+            sdk_gpio_irq_handler
+        );
+    } else {
+        // Nếu callback chung đã tồn tại, chỉ bật/tắt interrupt cho riêng chân này
+        gpio_set_irq_enabled(
+            light_int_pin,
+            GPIO_IRQ_EDGE_FALL,
+            cb != NULL
+        );
+    }
+}
+
+
 
 /* ===============================================
  *  TEMPERATURE AND HUMIDITY SENSOR HDC 2021
@@ -902,6 +946,31 @@ static int icm_i2c_write_byte(uint8_t reg, uint8_t value) {
 }
 
 // helper to read a byte from a register
+
+// ======================================================================
+//  SDK-level GPIO IRQ handler
+//  - currently used to handle VEML6030 interrupt pin
+//  - can be extended later to handle other sensors' INT pins too.
+// ======================================================================
+static void sdk_gpio_irq_handler(uint gpio, uint32_t events)
+{
+    // Kiểm tra xem có phải chân interrupt của cảm biến ánh sáng hay không
+    if ((events & GPIO_IRQ_EDGE_FALL) != 0) {
+        if (gpio == VEML6030_INTERRUPT) {   // đổi macro cho đúng với header bạn
+            // Đọc và clear status trong sensor
+            uint16_t status = veml6030_clear_interrupt_status();
+
+            // Gọi callback của user nếu có
+            if (s_veml6030_cb) {
+                s_veml6030_cb(status);
+            }
+        }
+    }
+
+    // Sau này nếu cần, bạn có thể thêm:
+    // else if (gpio == HDC2021_INTERRUPT) { ... } để bắt alert temp/humidity
+}
+
 static int icm_i2c_read_byte(uint8_t reg, uint8_t *value) {
     int result = i2c_write_blocking(i2c_default, ICM42670_I2C_ADDRESS, &reg, 1, true);
     if (result != 1) return -1;
