@@ -119,7 +119,9 @@ static void vBuzzerTask(void *pvParameters); // Plays sounds based on applicatio
 static void serial_tx_task(void *pvParameters); // Task to send Morse symbols over serial and TCP
 static void serial_rx_task(void *pvParameters); // Task to receive and process data from serial
 static void playback_task(void *pvParameters);  // Task to provide local feedback for Morse symbols
-
+// --- VEML6030 interrupt demo prototypes ---
+static void on_veml6030_interrupt(uint16_t status);
+static void app_init_sensors(void);
 
 // =================================================================================
 // --- CONSTANTS AND DATA STRUCTURES ---
@@ -202,6 +204,53 @@ static void play_message_sent_melody(void) {
     buzzer_play_tone(440, 300); // A4 note
 }
 
+// =================================================================================
+// --- VEML6030 LIGHT SENSOR INTERRUPT DEMO ---
+// This shows how we "use interrupts in sensors":
+//  - Configure thresholds and enable ALS interrupt inside VEML6030
+//  - Register a GPIO interrupt callback via the SDK
+//  - Provide a very small interrupt handler that gives visual feedback.
+// =================================================================================
+
+// This callback is called from the SDK's GPIO interrupt handler whenever
+// the VEML6030 interrupt pin (active low) is triggered.
+// IMPORTANT: it runs in interrupt context, so it must stay very short
+// (we only flash the RGB LED here).
+static void on_veml6030_interrupt(uint16_t status)
+{
+    (void)status; // We could inspect bits in 'status' if we need more detail
+
+    // Simple visual feedback: flash the RGB LED red for a very short moment.
+    // The actual "longer" handling (like printing or queues) is better done
+    // in a normal FreeRTOS task, but this is enough to demonstrate that
+    // the interrupt path is working.
+    rgb_led_write(255, 0, 0);
+}
+
+// Helper to initialise the VEML6030 light sensor and its interrupt behaviour.
+static void app_init_sensors(void)
+{
+    // Initialise the light sensor over I2C
+    if (veml6030_init() == 0) {
+        // Example thresholds. In a real application you would tune these
+        // so that "low" and "high" make sense in your lighting conditions.
+        // When the measured ALS crosses these windows, the sensor asserts INT.
+        veml6030_set_thresholds(100, 1000);
+
+        // Enable interrupt generation inside the device
+        veml6030_enable_interrupts(true);
+
+        // Register our callback and enable the GPIO interrupt for the INT pin.
+        // The function veml6030_set_interrupt_handler() is implemented
+        // in the SDK (sdk.c) and configures the GPIO + ISR.
+        veml6030_set_interrupt_handler(on_veml6030_interrupt);
+
+        printf("__VEML6030 interrupts enabled__\n");
+    } else {
+        printf("__VEML6030 init failed__\n");
+    }
+}
+
 
 // =================================================================================
 // --- MAIN FUNCTION ---
@@ -271,7 +320,9 @@ int main() {
     } else {
         printf("__MIC INIT FAILED__\n");
     }
-
+    
+    // 4.5. Initialize VEML6030 light sensor + its interrupt behaviour
+    app_init_sensors();
 
     // 5. Display a startup message on the OLED
     clear_display();
