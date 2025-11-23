@@ -1,3 +1,5 @@
+// Group members' names: Hoa Ly, Jonathan Tran, Kien Quoc Vu
+
 //
 // JTKJ Morse Communicator for Raspberry Pi Pico with TKJ HAT
 //
