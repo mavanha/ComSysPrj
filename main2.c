@@ -37,6 +37,7 @@
 
 // --- Custom Hardware Abstraction Layer ---
 #include "tkjhat/sdk.h" // TKJHAT SDK for interacting with the HAT's components (display, sensors, etc.)
+#include <tkjhat/utils.h>
 
 
 // =================================================================================
