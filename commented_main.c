@@ -9,8 +9,7 @@
 //
 // The application uses the FreeRTOS real-time operating system to manage multiple concurrent
 // tasks, ensuring responsive handling of user input, serial communication, and feedback
-// mechanisms like an OLED display, buzzer, and RGB LED. It also includes Wi-Fi
-// connectivity to demonstrate network integration.
+// mechanisms like an OLED display, buzzer, and RGB LED.
 //
 
 
@@ -222,8 +221,6 @@ int main() {
 
 
     // Add a small delay to wait for the USB serial connection to be established.
-    // This prevents the "White Screen of Death" where the program hangs if the
-    // serial monitor is not open when the Pico starts.
     int i = 0;
     while (!stdio_usb_connected() && i < 30) { // Wait max 3 seconds
         sleep_ms(100);
