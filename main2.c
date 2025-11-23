@@ -293,11 +293,38 @@ int main() {
 
 
     // 3. Initialize HAT Hardware
-    init_hat_sdk();
-    init_led();  
-    init_rgb_led();
-    init_buzzer();
-    init_display();
+    // Tier 3 utils: does init_hat_sdk + led + rgb + buzzer + display
+    hat_utils_init_all();
+
+    // 1) Simple status text only
+    hat_utils_show_status("Morse App", "Utils demo...");
+
+    // small pause so people can see it
+    sleep_ms(1000);
+
+    // 2) LED status patterns only
+    hat_utils_show_led_status(HAT_STATUS_OK);
+    sleep_ms(800);
+    hat_utils_show_led_status(HAT_STATUS_BUSY);
+    sleep_ms(800);
+    hat_utils_show_led_status(HAT_STATUS_ERROR);
+    sleep_ms(800);
+
+    // 3) Play each melody once
+    hat_utils_play_melody(HAT_MELODY_STARTUP);
+    sleep_ms(500);
+    hat_utils_play_melody(HAT_MELODY_SUCCESS);
+    sleep_ms(500);
+    hat_utils_play_melody(HAT_MELODY_ERROR);
+    sleep_ms(500);
+
+    // 4) Combined feedback: text + LEDs + buzzer
+    hat_utils_feedback(
+        HAT_STATUS_OK,
+        HAT_MELODY_SUCCESS,
+        "All utils used",
+        "Starting app..."
+    );
 
 
     // 4. Initialize On-board Sensors (IMU and Microphone)
