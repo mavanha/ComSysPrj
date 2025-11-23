@@ -595,12 +595,47 @@ static void serial_tx_task(void *pvParameters) {
     }
 }
 
-
 // =================================================================================
 // --- SERIAL RX TASK ---
 // This task continuously polls the USB serial for incoming characters, assembles
-// them into lines, and passes complete lines to `process_received_line`.
+// them into lines, and passes complete lines to process_received_line.
 // =================================================================================
+//
+//  AI-ASSISTED DEVELOPMENT NOTE (Author: Hoa Ly)
+//
+//  How I asked the AI for help:
+//  - I asked an AI assistant something like:
+//      "Please help me write a FreeRTOS task for Raspberry Pi Pico that reads
+//       characters from USB serial using getchar_timeout_us(), assembles them
+//       into a line buffer, and when a newline is received, calls a function
+//       process_received_line(line). I also need non-blocking behaviour and a
+//       small delay in the loop so other tasks can run."
+//
+//  What the AI suggested in its reply:
+//  - Use a static char buffer and an integer index (here: lineBuffer + linePos).
+//  - In a while(1) loop, call getchar_timeout_us(0) to get characters:
+//      * If it returns PICO_ERROR_TIMEOUT → no data, just delay and loop.
+//      * If it returns a normal character:
+//          - If it is '\n' or '\r', terminate the current string with '\0'
+//            and call process_received_line().
+//          - Otherwise, append to the buffer until there is no more space.
+//  - Add a small vTaskDelay() at the end so the task does not hog the CPU.
+//
+//  How I modified and integrated this code:
+//  - I chose my own buffer size constant SERIAL_RX_BUFFER_SIZE and index limit
+//    checks (linePos < SERIAL_RX_BUFFER_SIZE - 1) to prevent overflow.
+//  - I added the linePos = 0 reset in the overflow case so that a corrupted
+//    line does not break the following lines.
+//  - I integrated this function into our Morse project by calling our own
+//    process_received_line(lineBuffer), which parses Morse symbols and commands.
+//  - I kept the non-blocking pattern with getchar_timeout_us(0) but tuned the
+//    vTaskDelay(pdMS_TO_TICKS(10)) value so it cooperates nicely with other
+//    FreeRTOS tasks in the application.
+//
+//  In summary, the AI gave me a standard “serial line reader” pattern, and I
+//  adapted it to use our constants, call our Morse-specific process_received_line(),
+//  and fit into the timing constraints of the rest of the system.
+// -----------------------------------------------------------------------------
 static void serial_rx_task(void *pvParameters) {
     (void)pvParameters;
     char lineBuffer[SERIAL_RX_BUFFER_SIZE];
