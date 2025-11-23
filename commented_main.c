@@ -96,6 +96,8 @@ static int16_t      g_mic_buffer[MEMS_BUFFER_SIZE]; // Buffer to store the raw a
 // These are handles to the queues and semaphores created in main()
 static QueueHandle_t xSymbolQueue = NULL; // Internal queue to pass Morse symbols from the input task to the TX/playback tasks
 static QueueHandle_t xEventQueue  = NULL; // Queue for high-level application events, like signaling the buzzer task
+QueueHandle_t i2cMutex;             // A mutex to prevent concurrent access to the I2C bus (used by IMU and display)
+QueueHandle_t xPlaybackQueue;       // Queue for symbols that need local feedback (display/sound)
 
 
 // --- Microphone Interrupt Service Routine (ISR) Callback ---
@@ -114,6 +116,9 @@ static void on_pdm_samples_ready(void) {
 // Forward declarations for the functions that will run as FreeRTOS tasks
 static void input_task(void *pvParameters); // Handles all user input: buttons, IMU, and microphone
 static void vBuzzerTask(void *pvParameters); // Plays sounds based on application events
+static void serial_tx_task(void *pvParameters); // Task to send Morse symbols over serial and TCP
+static void serial_rx_task(void *pvParameters); // Task to receive and process data from serial
+static void playback_task(void *pvParameters);  // Task to provide local feedback for Morse symbols
 
 
 // =================================================================================
@@ -126,14 +131,12 @@ static void vBuzzerTask(void *pvParameters); // Plays sounds based on applicatio
 
 
 // --- Queue Lengths ---
-#define SERIAL_TX_QUEUE_LENGTH 20 // This is legacy and not directly used for symbol buffering anymore
 #define PLAYBACK_QUEUE_LENGTH 40  // Max number of symbols to buffer for local feedback (display, LED, buzzer)
 #define SERIAL_RX_BUFFER_SIZE 128 // Max characters for the serial receive buffer
 
 
 // --- IMU Thresholds ---
 #define IMU_TILT_THRESHOLD      0.9f // g-force value (approx 0.9g) that must be exceeded to register a tilt
-#define IMU_NEUTRAL_THRESHOLD   0.5f // g-force value below which the device is considered to be in a neutral (flat) position
 #define IMU_DEBOUNCE_MS         300  // Debounce time for IMU actions to prevent multiple triggers from one movement
 
 
@@ -144,12 +147,6 @@ volatile enum AppState {
   STATE_ARMED,      // IMU is armed. The next tilt will generate a symbol.
   STATE_COOLDOWN    // A symbol has just been generated. Waiting for the device to return to neutral.
 } g_appState = STATE_IDLE;
-
-
-// --- More FreeRTOS Handles ---
-QueueHandle_t xSerialTxQueue_actual; // This name is legacy; the queue is not used for primary TX logic
-QueueHandle_t xPlaybackQueue;       // Queue for symbols that need local feedback (display/sound)
-QueueHandle_t i2cMutex;             // A mutex to prevent concurrent access to the I2C bus (used by IMU and display)
 
 
 // --- Morse Code to Alphabet Translation Table ---
@@ -177,16 +174,10 @@ struct MorseAlphabet morseCodes[40] = {
 
 
 // =================================================================================
-// --- FUNCTION PROTOTYPES ---
+// --- FUNCTION PROTOTYPES (Continued) ---
 // =================================================================================
-static void serial_tx_task(void *pvParameters); // Task to send Morse symbols over serial
-static void serial_rx_task(void *pvParameters); // Task to receive and process data from serial
-static void playback_task(void *pvParameters);  // Task to provide local feedback for Morse symbols
 char find_letter_from_morse_code(char *morseCode); // Utility to translate Morse string to a character
 void process_received_line(char *line);            // Utility to process a complete line received via serial
-
-
-
 
 // --- Helper Functions ---
 // A simple wrapper to send a character symbol to the internal symbol queue.
@@ -290,7 +281,6 @@ int main() {
 
 
     // 6. Create FreeRTOS Queues and Mutexes
-    xSerialTxQueue_actual = xQueueCreate(SERIAL_TX_QUEUE_LENGTH, sizeof(char));
     xPlaybackQueue = xQueueCreate(PLAYBACK_QUEUE_LENGTH, sizeof(char));
     i2cMutex = xSemaphoreCreateMutex(); // To protect the I2C bus
     xSymbolQueue = xQueueCreate(SYMBOL_QUEUE_LENGTH, sizeof(char)); // Internal symbol queue
@@ -298,15 +288,14 @@ int main() {
 
 
     // Check if all queues and the mutex were created successfully. If not, halt.
-    if (xSerialTxQueue_actual == NULL || xPlaybackQueue == NULL || i2cMutex == NULL || xSymbolQueue == NULL || xEventQueue == NULL) {
+    if (xPlaybackQueue == NULL || i2cMutex == NULL || xSymbolQueue == NULL || xEventQueue == NULL) {
         printf("__CRITICAL ERROR: Could not create queues or mutex__\n");
         while (1) { blink_led(1); sleep_ms(100); } // Blink LED to indicate fatal error
     }
 
 
     // 7. Create FreeRTOS Tasks
-    // Each task is a separate thread of execution. Stack sizes have been increased
-    // to prevent stack overflow, which can be a common and hard-to-debug issue.
+    // Each task is a separate thread of execution.
     // Tasks are created with MAIN_TASK_PRIORITY.
     xTaskCreate(input_task, "InputTask", 2048, NULL, MAIN_TASK_PRIORITY, NULL);
     xTaskCreate(serial_tx_task, "TxTask", 2048, NULL, MAIN_TASK_PRIORITY, NULL);
@@ -462,9 +451,9 @@ static void input_task(void *pvParameters) {
 
                              if (read_ok_imu) {
                                  char symbol = '?'; // Default to unknown
-                                 // Check for significant tilt along Z (forward/back) or Y (left/right) axes
-                                 if (az > IMU_TILT_THRESHOLD)      symbol = '.'; // Tilt forward -> DOT
-                                 else if (ay < -IMU_TILT_THRESHOLD) symbol = '-'; // Tilt left -> DASH
+                                 // Check for significant tilt along Z or Y axes
+                                 if (az > IMU_TILT_THRESHOLD)      symbol = '.'; // Lay down -> DOT
+                                 else if (ay < -IMU_TILT_THRESHOLD) symbol = '-'; // Stand up -> DASH
                                  
                                  if (symbol != '?') {
                                      send_symbol(symbol);
@@ -477,9 +466,6 @@ static void input_task(void *pvParameters) {
                                  }
                              }
                         }
-                    } else { // g_inputMode == INPUT_MODE_MIC
-                        printf("__SW2 SHORT IN MIC MODE - no direct action__\n");
-                        // In microphone mode, short press on SW2 currently does nothing.
                     }
                 }
             }
@@ -836,8 +822,3 @@ char find_letter_from_morse_code(char *morseCode) {
     }
     return '?'; // Return '?' if the code is not found
 }
-
-
-
-
-
