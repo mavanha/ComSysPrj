@@ -668,12 +668,29 @@ void init_buzzer(void);
  *       toggling the pin for the entire duration.
  */
 void buzzer_play_tone(uint32_t frequency, uint32_t duration_ms);
+/**
+ * @brief Start playing a tone on the buzzer (non-blocking).
+ *
+ * Configures PWM on the buzzer pin and starts generating a square
+ * wave at the requested frequency. The function returns immediately;
+ * stop the tone later with ::buzzer_stop_tone().
+ *
+ * @param frequency Tone frequency in Hz (e.g. 440 for A4).
+ */
+void buzzer_start_tone(uint32_t frequency);
 
+/**
+ * @brief Stop the tone started with ::buzzer_start_tone().
+ *
+ * Disables PWM output on the buzzer pin and drives it low.
+ */
+void buzzer_stop_tone(void);
 /**
  * @brief Turn the buzzer off.
  *
  * Drives the buzzer pin low, silencing any ongoing tone.
  */
+
 void buzzer_turn_off(void);
 
 /**
